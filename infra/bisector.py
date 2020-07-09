@@ -125,7 +125,7 @@ def _load_base_builder_repo():
   return repo
 
 
-def _bisect(old_commit, new_commit, test_case_path, fuzz_target, build_data):  # pylint: disable=too-many-locals
+def _bisect(old_commit, new_commit, test_case_path, fuzz_target, build_data):  # pylint: disable=too-many-locals,too-many-statements
   """Perform the bisect."""
   base_builder_repo = _load_base_builder_repo()
 
