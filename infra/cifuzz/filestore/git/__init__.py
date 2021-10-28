@@ -99,7 +99,8 @@ class GitFilestore(filestore.BaseFilestore):
       logging.info('full repo path %s', full_repo_path)
       shutil.rmtree(full_repo_path)
 
-    dir_util.copy_tree(local_path, full_repo_path, verbose=True)
+    #dir_util.copy_tree(local_path, full_repo_path, verbose=True)
+    shutil.copytree(local_path, full_repo_path, dirs_exist_ok=True)
     self._git('add', '.')
     try:
       self._git('commit', '-m', message)
