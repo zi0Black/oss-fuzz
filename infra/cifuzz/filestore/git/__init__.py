@@ -96,10 +96,10 @@ class GitFilestore(filestore.BaseFilestore):
 
     full_repo_path = os.path.join(self.repo_path, upload_path)
     if replace and os.path.exists(full_repo_path):
-      logging.info('full repo path', full_repo_path)
+      logging.info('full repo path %s', full_repo_path)
       shutil.rmtree(full_repo_path)
 
-    dir_util.copy_tree(local_path, full_repo_path)
+    dir_util.copy_tree(local_path, full_repo_path, verbose=True)
     self._git('add', '.')
     try:
       self._git('commit', '-m', message)
