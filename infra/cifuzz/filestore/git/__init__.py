@@ -63,8 +63,7 @@ class GitFilestore(filestore.BaseFilestore):
     self._ci_filestore = ci_filestore
 
   def __del__(self):
-    #shutil.rmtree(self.repo_path)
-    pass
+    shutil.rmtree(self.repo_path)
 
   def _clone(self, repo_url):
     """Clones repo URL."""
@@ -98,8 +97,7 @@ class GitFilestore(filestore.BaseFilestore):
     full_repo_path = os.path.join(self.repo_path, upload_path)
     if replace and os.path.exists(full_repo_path):
       logging.info('full repo path', full_repo_path)
-      pass
-      #shutil.rmtree(full_repo_path)
+      shutil.rmtree(full_repo_path)
 
     dir_util.copy_tree(local_path, full_repo_path)
     self._git('add', '.')
