@@ -97,7 +97,8 @@ class GitFilestore(filestore.BaseFilestore):
 
     full_repo_path = os.path.join(self.repo_path, upload_path)
     if replace and os.path.exists(full_repo_path):
-      shutil.rmtree(full_repo_path)
+      pass
+      #shutil.rmtree(full_repo_path)
 
     dir_util.copy_tree(local_path, full_repo_path)
     self._git('add', '.')
