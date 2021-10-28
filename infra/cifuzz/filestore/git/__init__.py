@@ -63,7 +63,8 @@ class GitFilestore(filestore.BaseFilestore):
     self._ci_filestore = ci_filestore
 
   def __del__(self):
-    shutil.rmtree(self.repo_path)
+    #shutil.rmtree(self.repo_path)
+    pass
 
   def _clone(self, repo_url):
     """Clones repo URL."""
