@@ -139,6 +139,19 @@ def run_experiment(project_name, target_name, args, output_path,
       ],
   })
 
+  # Upload coverage build to enable coverage report generation.
+  steps.append({
+      'name':
+          'gcr.io/cloud-builders/gsutil',
+      'args': [
+          '-m',
+          'cp',
+          '-r',
+          build.out,
+          os.path.join(upload_coverage_path, 'build'),
+      ],
+  })
+
   # Upload raw coverage data.
   steps.append({
       'name':
