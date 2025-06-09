@@ -16,6 +16,7 @@
 
 FROM gcr.io/oss-fuzz-base/base-builder
 RUN apt-get update && apt-get install -y \
+  autoconf-archive \
   automake \
   autopoint \
   cmake \
@@ -39,7 +40,6 @@ RUN git clone --depth 1 https://github.com/madler/zlib.git
 RUN git clone --depth 1 https://github.com/libexif/libexif.git
 RUN git clone --depth 1 https://github.com/mm2/Little-CMS.git lcms
 RUN git clone --depth 1 https://github.com/libjpeg-turbo/libjpeg-turbo.git
-RUN git clone --depth 1 https://github.com/glennrp/libpng.git
 RUN git clone --depth 1 https://github.com/randy408/libspng.git
 RUN git clone --depth 1 https://chromium.googlesource.com/webm/libwebp
 RUN git clone --depth 1 https://gitlab.com/libtiff/libtiff.git
@@ -51,6 +51,3 @@ RUN git clone --depth 1 https://github.com/google/highway.git
 
 WORKDIR libvips
 COPY build.sh $SRC/
-# This is to fix Fuzz Introspector build by using LLVM old pass manager
-# re https://github.com/ossf/fuzz-introspector/issues/305
-ENV OLD_LLVMPASS 1

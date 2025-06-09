@@ -27,6 +27,7 @@ import time
 import urllib.request
 
 from googleapiclient.discovery import build as cloud_build
+from googleapiclient.errors import HttpError
 import oauth2client.client
 import yaml
 
@@ -56,6 +57,9 @@ BUILD_TYPES = {
                   'status-introspector.json'),
     'fuzzing':
         BuildType('fuzzing', build_project.get_build_steps, 'status.json'),
+    'indexer':
+        BuildType('indexer', build_project.get_indexer_build_steps,
+                  'status.json'),
 }
 
 
@@ -107,13 +111,12 @@ def handle_special_projects(args):
   if 'all' in args.projects:  # Explicit opt-in for all.
     args.projects = all_projects
     return
+  project_languages = get_project_languages()
   for project in args.projects[:]:
-    if project not in all_projects:
-      project_languages = get_project_languages()
-      if project in project_languages.keys():
-        language = project
-        args.projects.remove(language)
-        args.projects.extend(project_languages[language])
+    if project in project_languages.keys():
+      language = project
+      args.projects.remove(language)
+      args.projects.extend(project_languages[language])
 
 
 def get_args(args=None):
@@ -210,7 +213,7 @@ def _do_build_type_builds(args, config, credentials, build_type, projects):
 
     build_project.set_yaml_defaults(project_yaml)
     project_yaml_sanitizers = build_project.get_sanitizer_strings(
-        project_yaml['sanitizers']) + ['coverage', 'introspector']
+        project_yaml['sanitizers']) + ['coverage', 'indexer', 'introspector']
     project_yaml['sanitizers'] = list(
         set(project_yaml_sanitizers).intersection(set(args.sanitizers)))
 
@@ -253,8 +256,13 @@ def check_finished(build_id, project, cloudbuild_api, cloud_project,
                    build_results):
   """Checks that the |build_type| build is complete. Updates |project_status| if
   complete."""
-  build_status = get_build_status_from_gcb(cloudbuild_api, cloud_project,
-                                           build_id)
+
+  try:
+    build_status = get_build_status_from_gcb(cloudbuild_api, cloud_project,
+                                             build_id)
+  except HttpError:
+    logging.debug('build: HttpError when getting build status from gcb')
+    return False
   if build_status not in FINISHED_BUILD_STATUSES:
     logging.debug('build: %d not finished.', build_id)
     return False
@@ -262,13 +270,13 @@ def check_finished(build_id, project, cloudbuild_api, cloud_project,
   return True
 
 
-def wait_on_builds(build_ids, credentials, cloud_project, end_time):
+def wait_on_builds(build_ids, credentials, cloud_project, end_time):  # pylint: disable=too-many-locals
   """Waits on |builds|. Returns True if all builds succeed."""
   cloudbuild = cloud_build('cloudbuild',
                            'v1',
                            credentials=credentials,
                            cache_discovery=False,
-                           client_options=build_lib.US_CENTRAL_CLIENT_OPTIONS)
+                           client_options=build_lib.REGIONAL_CLIENT_OPTIONS)
   cloudbuild_api = cloudbuild.projects().builds()  # pylint: disable=no-member
 
   wait_builds = build_ids.copy()
@@ -287,9 +295,8 @@ def wait_on_builds(build_ids, credentials, cloud_project, end_time):
     current_time = datetime.datetime.now()
     # Update status every hour.
     if current_time >= next_check_time:
-      logging.info(
-          f'[{current_time}] Remaining builds: {len(wait_builds)}, {wait_builds}'
-      )
+      logging.info(f'[{current_time}] Remaining builds: '
+                   f'{len(wait_builds)}, {wait_builds}')
       next_check_time += datetime.timedelta(hours=1)
 
     # Warn users and write a summary if build is about to end.
@@ -298,9 +305,9 @@ def wait_on_builds(build_ids, credentials, cloud_project, end_time):
       logging.info(
           f'[{current_time}] Warning: trial build may time out in '
           f'{BUILD_TIMEOUT_WARNING_MINUTES} minutes.\n'
-          f'Remaining builds: {len(wait_builds)}/{builds_count}, {wait_builds}.\n'
-          f'Failed builds: {len(failed_builds)}/{builds_count}, {failed_builds}'
-      )
+          f'Remaining builds: {len(wait_builds)}/{builds_count}, {wait_builds}.'
+          f'\nFailed builds: {len(failed_builds)}/{builds_count}, '
+          f'{failed_builds}')
 
     for project, project_build_ids in list(wait_builds.items()):
       for build_id in project_build_ids[:]:
@@ -320,7 +327,7 @@ def wait_on_builds(build_ids, credentials, cloud_project, end_time):
   # Return failure if any build fails or nothing is built.
   if failed_builds or not build_results:
     logging.info(
-        f'Summary: trial build failed\n'
+        'Summary: trial build failed\n'
         f'Failed builds: {len(failed_builds)}/{builds_count}, {failed_builds}')
     return False
 
@@ -340,6 +347,9 @@ def _do_test_builds(args, test_image_suffix, end_time):
   if 'introspector' in sanitizers:
     sanitizers.pop(sanitizers.index('introspector'))
     build_types.append(BUILD_TYPES['introspector'])
+  if 'indexer' in sanitizers:
+    sanitizers.pop(sanitizers.index('indexer'))
+    build_types.append(BUILD_TYPES['indexer'])
   if sanitizers:
     build_types.append(BUILD_TYPES['fuzzing'])
   build_ids = collections.defaultdict(list)

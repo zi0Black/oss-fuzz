@@ -1,5 +1,5 @@
 #!/bin/bash -eu
-# Copyright 2018 Google Inc.
+# Copyright 2024 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,13 +18,12 @@
 ./autogen.sh --no-po4a --no-doxygen
 ./configure \
   --enable-static \
-  --disable-debug \
+  --enable-debug \
   --disable-shared \
   --disable-xz \
   --disable-xzdec \
   --disable-lzmadec \
-  --disable-lzmainfo \
-  --disable-ifunc
+  --disable-lzmainfo
 
 make clean
 make -j$(nproc)

@@ -13,8 +13,16 @@
 # limitations under the License.
 #
 ##########################################################################
-FROM gcr.io/oss-fuzz-base/base-builder-python
-RUN pip3 install --upgrade pip
-RUN git clone https://github.com/PyCQA/astroid astroid
-COPY *.sh *py $SRC/
-WORKDIR $SRC/astroid
+
+# Held back because of github.com/google/oss-fuzz/pull/13407
+# Please fix the build failure + upgrade.
+
+FROM gcr.io/oss-fuzz-base/base-builder-python@sha256:d223a882810372830fd7968eb3e64533f3a2318c90be43ac753a46a15946faec
+
+RUN pip3 install --disable-pip-version-check --no-cache-dir pip==24.2
+
+RUN git clone --depth=1 --no-tags https://github.com/pylint-dev/astroid
+
+COPY *.py *.sh "$SRC/"
+
+WORKDIR "$SRC/astroid"

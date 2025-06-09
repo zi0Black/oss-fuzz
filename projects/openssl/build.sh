@@ -62,13 +62,28 @@ function build_fuzzers() {
     done
     cp fuzz/oids.txt $OUT/asn1${SUFFIX}.dict
     cp fuzz/oids.txt $OUT/x509${SUFFIX}.dict
+    if [ "$SANITIZER" == coverage ]; then
+      DESTDIR=$OUT/src/openssl${SUFFIX#_}
+      SOURCES="include crypto ssl providers engines fuzz"
+      mkdir -p $DESTDIR
+      if [ -f e_os.h ]; then
+        cp e_os.h $DESTDIR/
+      fi
+      find $SOURCES -type f -a \( -name '*.[ch]' -o -name '*.inc' \) -exec cp --parents '{}' $DESTDIR/ \;
+    fi
+
+    if [[ -z "${INDEXER_BUILD:-}" ]]; then
+      df
+      rm -rf * .git*
+      df
+    fi
 }
 
 cd $SRC/openssl/
 build_fuzzers ""
 
-# In introspector only build the master branch
-if [[ "$SANITIZER" == introspector ]]; then
+# In introspector and indexer builds, only build the master branch
+if [[ "$SANITIZER" == introspector || -n "${INDEXER_BUILD:-}" ]]; then
   exit 0
 fi
 

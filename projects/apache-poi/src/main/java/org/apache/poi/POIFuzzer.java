@@ -49,8 +49,14 @@ import org.apache.poi.util.RecordFormatException;
  * It catches all exceptions that are currently expected.
  */
 public class POIFuzzer {
+	public static void fuzzerInitialize() {
+		adjustLimits();
+	}
+
 	public static void fuzzerTestOneInput(byte[] input) {
 		// try to invoke various methods which parse documents/workbooks/slide-shows/...
+		// all of these catch expected exceptions and thus any failure indicates something
+		// that we should take a look at
 
 		fuzzAny(input);
 
@@ -124,8 +130,16 @@ public class POIFuzzer {
 	public static void checkExtractor(POITextExtractor extractor) throws IOException {
 		extractor.getDocument();
 		extractor.getFilesystem();
-		extractor.getMetadataTextExtractor();
-		extractor.getText();
+		try {
+			extractor.getMetadataTextExtractor();
+		} catch (IllegalStateException e) {
+			// can happen here
+		}
+		try {
+			extractor.getText();
+		} catch (OpenXML4JRuntimeException e) {
+			// can happen here
+		}
 
 		if (extractor instanceof POIOLE2TextExtractor) {
 			POIOLE2TextExtractor ole2Extractor = (POIOLE2TextExtractor) extractor;

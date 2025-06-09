@@ -30,11 +30,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.request
 
 import constants
 import templates
 
-OSS_FUZZ_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+OSS_FUZZ_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 BUILD_DIR = os.path.join(OSS_FUZZ_DIR, 'build')
 
 BASE_RUNNER_IMAGE = 'gcr.io/oss-fuzz-base/base-runner'
@@ -52,6 +53,7 @@ BASE_IMAGES = {
     'jvm': ['gcr.io/oss-fuzz-base/base-builder-jvm'],
     'python': ['gcr.io/oss-fuzz-base/base-builder-python'],
     'rust': ['gcr.io/oss-fuzz-base/base-builder-rust'],
+    'ruby': ['gcr.io/oss-fuzz-base/base-builder-ruby'],
     'swift': ['gcr.io/oss-fuzz-base/base-builder-swift'],
 }
 
@@ -84,6 +86,7 @@ LANGUAGE_TO_BASE_BUILDER_IMAGE = {
     'javascript': 'base-builder-javascript',
     'jvm': 'base-builder-jvm',
     'python': 'base-builder-python',
+    'ruby': 'base-builder-ruby',
     'rust': 'base-builder-rust',
     'swift': 'base-builder-swift'
 }
@@ -93,6 +96,9 @@ CLUSTERFUZZLITE_ENGINE = 'libfuzzer'
 CLUSTERFUZZLITE_ARCHITECTURE = 'x86_64'
 CLUSTERFUZZLITE_FILESTORE_DIR = 'filestore'
 CLUSTERFUZZLITE_DOCKER_IMAGE = 'gcr.io/oss-fuzz-base/cifuzz-run-fuzzers'
+
+INDEXER_PREBUILT_URL = ('https://clusterfuzz-builds.storage.googleapis.com/'
+                        'oss-fuzz-artifacts/indexer')
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +151,35 @@ class Project:
 
     logger.warning('Language not specified in project.yaml. Assuming c++.')
     return constants.DEFAULT_LANGUAGE
+
+  @property
+  def coverage_extra_args(self):
+    """Returns project coverage extra args."""
+    project_yaml_path = os.path.join(self.build_integration_path,
+                                     'project.yaml')
+    if not os.path.exists(project_yaml_path):
+      logger.warning('project.yaml not found: %s.', project_yaml_path)
+      return ''
+
+    with open(project_yaml_path) as file_handle:
+      content = file_handle.read()
+
+    coverage_flags = ''
+    read_coverage_extra_args = False
+    # Pass the yaml file and extract the value of the coverage_extra_args key.
+    # This is naive yaml parsing and we do not handle comments at this point.
+    for line in content.splitlines():
+      if read_coverage_extra_args:
+        # Break reading coverage args if a new yaml key is defined.
+        if len(line) > 0 and line[0] != ' ':
+          break
+        coverage_flags += line
+      if 'coverage_extra_args' in line:
+        read_coverage_extra_args = True
+        # Include the first line only if it's not a multi-line value.
+        if 'coverage_extra_args: >' not in line:
+          coverage_flags += line.replace('coverage_extra_args: ', '')
+    return coverage_flags
 
   @property
   def out(self):
@@ -215,6 +250,8 @@ def main():  # pylint: disable=too-many-branches,too-many-return-statements
     result = shell(args)
   elif args.command == 'pull_images':
     result = pull_images()
+  elif args.command == 'index':
+    result = index(args)
   elif args.command == 'run_clusterfuzzlite':
     result = run_clusterfuzzlite(args)
   else:
@@ -333,6 +370,28 @@ def get_parser():  # pylint: disable=too-many-statements,too-many-locals
                                   help='name of the fuzzer',
                                   nargs='?')
   _add_external_project_args(check_build_parser)
+  index_parser = subparsers.add_parser('index', help='Index project.')
+  index_parser.add_argument(
+      '--targets', help='Allowlist of targets to index (comma-separated).')
+  index_parser.add_argument('--dev',
+                            action='store_true',
+                            help=('Use development versions of scripts and '
+                                  'indexer.'))
+  index_parser.add_argument('--shell',
+                            action='store_true',
+                            help='Run /bin/bash instead of the indexer.')
+  index_parser.add_argument('--docker_arg',
+                            help='Additional docker argument to pass through '
+                            '(can be specified multiple times).',
+                            nargs='*',
+                            action='extend')
+  index_parser.add_argument('project', help='Project')
+  index_parser.add_argument(
+      'extra_args',
+      nargs='*',
+      help='Additional args to pass through to the Docker entrypoint.')
+  _add_architecture_args(index_parser)
+  _add_environment_args(index_parser)
 
   run_fuzzer_parser = subparsers.add_parser(
       'run_fuzzer', help='Run a fuzzer in the emulated fuzzing environment.')
@@ -690,9 +749,14 @@ def docker_run(run_args, print_output=True, architecture='x86_64'):
   """Calls `docker run`."""
   platform = 'linux/arm64' if architecture == 'aarch64' else 'linux/amd64'
   command = [
-      'docker', 'run', '--rm', '--privileged', '--shm-size=2g', '--platform',
-      platform
+      'docker', 'run', '--privileged', '--shm-size=2g', '--platform', platform
   ]
+  if os.getenv('OSS_FUZZ_SAVE_CONTAINERS_NAME'):
+    command.append('--name')
+    command.append(os.getenv('OSS_FUZZ_SAVE_CONTAINERS_NAME'))
+  else:
+    command.append('--rm')
+
   # Support environments with a TTY.
   if sys.stdin.isatty():
     command.append('-i')
@@ -1192,7 +1256,7 @@ def download_corpora(args):
   return all(thread_pool.map(_download_for_single_target, fuzz_targets))
 
 
-def coverage(args):
+def coverage(args):  # pylint: disable=too-many-branches
   """Generates code coverage using clang source based code coverage."""
   if args.corpus_dir and not args.fuzz_target:
     logger.error(
@@ -1214,13 +1278,15 @@ def coverage(args):
     if not download_corpora(args):
       return False
 
+  extra_cov_args = (
+      f'{args.project.coverage_extra_args.strip()} {" ".join(args.extra_args)}')
   env = [
       'FUZZING_ENGINE=libfuzzer',
       'HELPER=True',
       'FUZZING_LANGUAGE=%s' % args.project.language,
       'PROJECT=%s' % args.project.name,
       'SANITIZER=coverage',
-      'COVERAGE_EXTRA_ARGS=%s' % ' '.join(args.extra_args),
+      'COVERAGE_EXTRA_ARGS=%s' % extra_cov_args,
       'ARCHITECTURE=' + args.architecture,
   ]
 
@@ -1372,7 +1438,8 @@ def run_fuzzer(args):
   if not check_project_exists(args.project):
     return False
 
-  if not _check_fuzzer_exists(args.project, args.fuzzer_name):
+  if not _check_fuzzer_exists(args.project, args.fuzzer_name,
+                              args.architecture):
     return False
 
   env = [
@@ -1510,7 +1577,7 @@ def reproduce_impl(  # pylint: disable=too-many-arguments
   if not check_project_exists(project):
     return err_result
 
-  if not _check_fuzzer_exists(project, fuzzer_name):
+  if not _check_fuzzer_exists(project, fuzzer_name, architecture):
     return err_result
 
   debugger = ''
@@ -1636,16 +1703,80 @@ def _generate_impl(project, language):
   return True
 
 
+def index(args):
+  """Runs the indexer on the project."""
+  if not args.project.is_external and not check_project_exists(args.project):
+    return False
+
+  image_name = f'gcr.io/oss-fuzz/{args.project.name}'
+  if not build_image_impl(
+      args.project, cache=True, pull=False, architecture=args.architecture):
+    logger.error('Failed to build project image for indexer.')
+    return False
+  env = [
+      f'ARCHITECTURE={args.architecture}',
+      'HELPER=True',
+      f'PROJECT_NAME={args.project.name}',
+      'INDEXER_BUILD=1',
+  ]
+  if args.e:
+    env.extend(args.e)
+
+  run_args = _env_to_docker_args(env)
+  run_args.extend([
+      '-v',
+      f'{args.project.out}:/out',
+      '-v',
+      f'{args.project.work}:/work',
+      '-t',
+  ])
+
+  if args.docker_arg:
+    run_args.extend(args.docker_arg)
+
+  if args.dev:
+    indexer_dir = os.path.join(OSS_FUZZ_DIR,
+                               'infra/base-images/base-builder/indexer')
+    indexer_binary_path = os.path.join(indexer_dir, 'indexer')
+    if not os.path.exists(indexer_binary_path):
+      print('Indexer binary does not exist, pulling prebuilt.')
+      with urllib.request.urlopen(INDEXER_PREBUILT_URL) as resp, \
+          open(indexer_binary_path, 'wb') as f:
+        shutil.copyfileobj(resp, f)
+        os.chmod(indexer_binary_path, 0o755)
+
+    run_args.extend(['-v', f'{indexer_dir}:/opt/indexer'])
+
+  run_args.append(image_name)
+  if args.shell:
+    run_args.append('/bin/bash')
+  else:
+    run_args.append('/opt/indexer/index_build.py')
+
+  if args.targets:
+    run_args.extend(['--targets', args.targets])
+
+  run_args.extend(args.extra_args)
+
+  logger.info(f'Running indexer for project: {args.project.name}')
+  result = docker_run(run_args, architecture=args.architecture)
+  if result:
+    logger.info('Indexer completed successfully.')
+  else:
+    logger.error('Indexer failed.')
+
+  return result
+
+
 def shell(args):
   """Runs a shell within a docker image."""
   if not build_image_impl(args.project):
     return False
 
   env = [
-      'FUZZING_ENGINE=' + args.engine,
-      'SANITIZER=' + args.sanitizer,
-      'ARCHITECTURE=' + args.architecture,
-      'HELPER=True',
+      'FUZZING_ENGINE=' + args.engine, 'SANITIZER=' + args.sanitizer,
+      'ARCHITECTURE=' + args.architecture, 'HELPER=True',
+      f'PROJECT_NAME={args.project.name}'
   ]
 
   if args.project.name != 'base-runner-debug':
